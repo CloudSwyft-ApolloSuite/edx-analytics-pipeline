@@ -229,6 +229,128 @@ class UserActivityTableTask(UserActivityDownstreamMixin, BareHiveTableTask):
         ]
 
 
+class CourseActivityPartitionTaskSpark(WeeklyIntervalMixin, UserActivityDownstreamMixin, SparkJobTask):
+    """
+    Spark equivalent of CourseActivityPartitionTask
+    """
+    output_root = luigi.Parameter()
+
+    def output(self):
+        return get_target_from_url(
+            url_path_join(
+                self.output_root,
+                self.table(),
+                'dt=' + self.end_date.isoformat()
+            )
+        )
+
+    def requires(self):
+        yield (
+            UserActivityTableTask(
+                warehouse_path=self.warehouse_path,
+                n_reduce_tasks=self.n_reduce_tasks,
+                overwrite=self.overwrite,
+                overwrite_n_days=self.overwrite_n_days,
+                date=self.end_date
+            ),
+            CalendarTableTask(
+                warehouse_path=self.warehouse_path,
+            )
+        )
+
+    def table(self):
+        return 'course_activity'
+
+    def user_activity_hive_table_path(self):
+        return url_path_join(
+            self.warehouse_path,
+            'user_activity'
+        )
+
+    def calendar_hive_table_path(self):
+        return url_path_join(
+            self.warehouse_path,
+            'calendar'
+        )
+
+    def get_user_activity_table_schema(self):
+        from pyspark.sql.types import StructType, StringType
+        schema = StructType().add("course_id", StringType(), True) \
+            .add("username", StringType(), True) \
+            .add("date", StringType(), True) \
+            .add("category", StringType(), True) \
+            .add("count", StringType(), True) \
+            .add("dt", StringType(), True)
+        return schema
+
+    def get_calendar_table_schema(self):
+        from pyspark.sql.types import StructType, StringType
+        schema = StructType().add("date", StringType(), True) \
+            .add("year", StringType(), True) \
+            .add("month", StringType(), True) \
+            .add("day", StringType(), True) \
+            .add("iso_weekofyear", StringType(), True) \
+            .add("iso_week_start", StringType(), True) \
+            .add("iso_week_end", StringType(), True) \
+            .add("iso_weekday", StringType(), True) \
+            .add("date_interval", StringType(), True)
+        return schema
+
+    def spark_job(self):
+        user_activity_df = self._spark.read.csv(
+            self.user_activity_hive_table_path(),
+            sep='\t',
+            schema=self.get_user_activity_table_schema()
+        )
+        calendar_df = self._spark.read.csv(
+            self.calendar_hive_table_path(),
+            sep='\t',
+            schema=self.get_calendar_table_schema()
+        )
+        self._sql_context.registerDataFrameAsTable(user_activity_df, 'user_activity')
+        self._sql_context.registerDataFrameAsTable(calendar_df, 'calendar')
+        query = """
+                SELECT
+                    act.course_id as course_id,
+                    CONCAT(cal.iso_week_start, " 00:00:00") as interval_start,
+                    CONCAT(cal.iso_week_end, " 00:00:00") as interval_end,
+                    act.category as label,
+                    COUNT (DISTINCT username) as count
+                FROM user_activity act
+                JOIN calendar cal
+                    ON act.date = cal.date AND act.dt >= "{interval_start}" AND act.dt < "{interval_end}"
+                WHERE
+                    cal.date >= "{interval_start}" AND cal.date < "{interval_end}"
+                GROUP BY
+                    act.course_id,
+                    cal.iso_week_start,
+                    cal.iso_week_end,
+                    act.category
+                """.format(
+            interval_start=self.interval.date_a.isoformat(),
+            interval_end=self.interval.date_b.isoformat(),
+        )
+        result = self._sql_context.sql(query)
+        result.coalesce(1).write.csv(self.output().path, mode='overwrite', sep='\t')
+        # with dataframe
+        # from pyspark.sql.functions import concat, lit, countDistinct
+        # user_activity_df = user_activity_df.filter(
+        #     (user_activity_df['date'] >= self.interval.date_a.isoformat()) &
+        #     (user_activity_df['date'] < self.interval.date_b.isoformat())
+        # )
+        # calendar_df = calendar_df.filter(
+        #     (calendar_df['date'] >= self.interval.date_a.isoformat()) &
+        #     (calendar_df['date'] < self.interval.date_b.isoformat())
+        # )
+        # joined_df = user_activity_df.join(calendar_df, on=(user_activity_df['date'] == calendar_df['date']))
+        # raw_df = joined_df.withColumn('interval_start', concat(joined_df['iso_week_start'], lit(' 00:00:00'))) \
+        #     .withColumn('interval_end', concat(joined_df['iso_week_end'], lit(' 00:00:00')))
+        # result = raw_df.groupBy('course_id', 'interval_start', 'interval_end', 'category').agg(
+        #     countDistinct('username').alias('count')
+        # )
+
+
+
 class CourseActivityTableTask(BareHiveTableTask):
 
     @property
