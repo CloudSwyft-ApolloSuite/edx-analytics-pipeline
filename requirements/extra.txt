@@ -9,4 +9,4 @@ git+https://github.com/edx/luigi.git@eb45bcc52243de11b2b16a81229ac584fe1e601b#eg
 git+https://github.com/edx/pyinstrument.git@a35ff76df4c3d5ff9a2876d859303e33d895e78f#egg=pyinstrument     # BSD
 
 # This was originally separated out from default.in so that it was not included in docs.txt.  Not clear why.
-psycopg2==2.6.2
+# psycopg2==2.6.2
