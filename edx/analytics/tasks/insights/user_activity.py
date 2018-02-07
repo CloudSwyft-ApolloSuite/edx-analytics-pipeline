@@ -239,7 +239,6 @@ class CourseActivityPartitionTaskSpark(WeeklyIntervalMixin, UserActivityDownstre
         return get_target_from_url(
             url_path_join(
                 self.output_root,
-                self.table(),
                 'dt=' + self.end_date.isoformat()
             )
         )
